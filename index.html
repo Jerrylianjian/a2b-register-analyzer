@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="从 A2B Script 日志定位每条链路、节点和寄存器的首个非零读数。">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>A2B 寄存器首现看板</title>
+<style>:root {
+  color-scheme: light;
+  --ink:#17263a; --muted:#53657a; --soft:#e0e7ef; --base:#f2f5f9; --paper:#fff;
+  --navy:#142943; --accent:#08696d; --accent-soft:#e8f5f4; --focus:#1277a0;
+  --amber:#854007; --amber-soft:#fff4e4; --radius:17px;
+  --sans:system-ui,-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+html { background:var(--base); }
+body { margin:0; color:var(--ink); font:16px/1.55 var(--sans); }
+h1,h2,h3,p { margin:0; }
+button,select { font:inherit; }
+button { cursor:pointer; }
+button:disabled { cursor:default; opacity:.48; }
+button:focus-visible,select:focus-visible,summary:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+code,.mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+.shell { width:min(1280px,calc(100% - 72px)); margin-inline:auto; }
+.masthead {
+  background:radial-gradient(ellipse at 87% -38%,#235d65 1%,transparent 63%),linear-gradient(110deg,#13253e,#162f47);
+  color:#fff; border-top:4px solid #51b9b0;
+}
+.hero { padding-block:24px 32px; }
+.product { display:flex; align-items:center; gap:9px; font:650 .78rem/1.2 var(--mono); letter-spacing:.12em; color:#c3e6e7; }
+.product-mark { display:flex; gap:3px; align-items:center; margin-right:2px; }
+.product-mark i { width:4px; height:9px; background:#82d3ca; border-radius:2px; }
+.product-mark i:nth-child(2) { height:15px; }
+.product-divider { color:#80a9b6; }
+.hero-main { display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-top:20px; }
+.hero h1 { font-size:clamp(1.75rem,3.6vw,2.6rem); letter-spacing:-.027em; font-weight:715; line-height:1.17; }
+.hero p { margin-top:10px; font-size:1rem; color:#d7e4ef; }
+.hero-scope { flex:0 0 auto; align-content:center; display:grid; gap:4px; padding-left:20px; border-left:1px solid #67a3aa75; font-size:.88rem; color:#bcd4df; }
+.hero-scope b { margin-left:8px; color:#f0fbff; font:600 .875rem var(--mono); }
+main.shell { padding-block:22px 38px; }
+.panel { background:var(--paper); border:1px solid var(--soft); border-radius:var(--radius); box-shadow:0 2px 9px #20334f06; }
+.ingest { overflow:hidden; }
+.ingest.is-drop { outline:2px solid var(--focus); border-color:transparent; box-shadow:0 0 0 6px #117eb31c; }
+.ingest-main { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; padding:17px 20px; }
+.data-source { display:flex; align-items:center; gap:12px; min-width:0; }
+.source-mark { display:grid; place-items:center; flex:0 0 47px; height:44px; border:1px solid #cce6e2; color:#136662; background:#eff8f6; border-radius:11px; font:700 .79rem var(--mono); }
+.data-source h2 { font-size:1rem; font-weight:680; }
+.dataset-range { color:var(--muted); font-size:.875rem; margin-top:2px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.btn { border:1px solid #cbd7e2; background:#fff; color:var(--ink); border-radius:9px; padding:7px 12px; min-height:38px; font-size:.875rem; font-weight:620; white-space:nowrap; }
+.btn:hover:not(:disabled) { background:#f2f7fa; border-color:#a4bbc9; }
+.btn.primary { color:#fff; border-color:var(--accent); background:var(--accent); }
+.btn.primary:hover:not(:disabled) { color:#fff; background:#075b5e; border-color:#075b5e; }
+.ingest-foot { display:flex; justify-content:space-between; flex-wrap:wrap; gap:5px 14px; align-items:center; background:#f8fafc; border-top:1px solid var(--soft); color:var(--muted); padding:8px 20px; font-size:.835rem; }
+.local { color:#245e5a; font-weight:610; }
+.local i { display:inline-block; margin-right:7px; width:7px; height:7px; border-radius:50%; background:#26776f; vertical-align:1px; }
+.notice { padding:9px 20px; border-top:1px solid var(--soft); color:#255569; font-size:.9rem; }
+.notice.warn { background:var(--amber-soft); color:var(--amber); }
+.metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-block:15px; }
+.metric { min-width:0; min-height:126px; padding:14px 19px; text-align:left; }
+button.metric:hover { border-color:#8fbcbd; background:#fbfefe; }
+.metric-tag { display:flex; align-items:center; gap:7px; color:#4d6278; font-size:.875rem; font-weight:640; }
+.metric-tag .tag { padding:1px 6px; border-radius:5px; background:#e7f2f1; color:#16605e; font-size:.77rem; }
+.metric-main { display:block; margin-top:7px; font:700 clamp(1.02rem,1.95vw,1.38rem)/1.35 var(--mono); color:#142943; overflow-wrap:normal; }
+.metric-meta { display:block; margin-top:5px; color:var(--muted); font-size:.875rem; line-height:1.5; }
+.metric-meta b { color:#116b6c; font-family:var(--mono); }
+.metric-plural { font-size:.78rem; margin-left:6px; color:#5a7083; }
+.workspace { overflow:hidden; }
+.work-head { padding:16px 20px 13px; display:flex; justify-content:space-between; align-items:center; gap:8px 18px; flex-wrap:wrap; }
+.work-head h2 { font-size:1.18rem; font-weight:700; }
+.work-head p { font-size:.875rem; margin-top:2px; color:var(--muted); }
+.toolbar { display:flex; align-items:center; gap:9px 16px; justify-content:space-between; flex-wrap:wrap; padding:11px 20px; border-block:1px solid var(--soft); background:#f9fbfd; }
+.views { display:inline-flex; gap:2px; padding:3px; background:#e9eff5; border-radius:10px; }
+.views button { padding:6px 12px; border:0; border-radius:7px; color:#475c72; font-size:.875rem; font-weight:635; background:transparent; }
+.views button[aria-pressed="true"] { color:#104f50; background:#fff; box-shadow:0 1px 4px #14294321; }
+.views button:hover:not([aria-pressed="true"]) { background:#f1f6fa; }
+.filters { display:flex; gap:8px 16px; flex-wrap:wrap; }
+.filters label { display:flex; gap:6px; align-items:center; color:var(--muted); font-size:.855rem; }
+select { appearance:none; color:var(--ink); padding:6px 28px 6px 8px; border-radius:7px; border:1px solid #c9d5e1; min-height:35px; background-color:#fff; background-image:linear-gradient(45deg,transparent 50%,#486479 50%),linear-gradient(135deg,#486479 50%,transparent 50%); background-size:5px 5px; background-position:calc(100% - 12px) 49%,calc(100% - 7px) 49%; background-repeat:no-repeat; font-size:.875rem; }
+.view-status { padding:10px 20px; font-size:.875rem; color:var(--muted); background:#fff; border-bottom:1px solid var(--soft); }
+.view-status b { color:#175b5d; font-weight:680; }
+.results { padding:15px 20px 20px; }
+.chain-box { border:1px solid var(--soft); border-radius:12px; overflow:hidden; }
+.chain-box + .chain-box { margin-top:15px; }
+.chain-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:3px 12px; padding:9px 13px; background:#eef3f8; }
+.chain-head h3 { color:#1e3953; font-size:.97rem; font-weight:690; }
+.chain-head span { color:#42586e; font-size:.835rem; }
+.table-scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; text-align:left; font-variant-numeric:tabular-nums; }
+table.full { min-width:630px; }
+thead { background:#fafbfd; color:#455b70; }
+thead th { padding:8px 10px; font-size:.85rem; font-weight:650; white-space:nowrap; }
+thead th:first-child { padding-left:13px; min-width:105px; }
+tbody tr { border-top:1px solid #edf1f5; }
+tbody tr:nth-child(even) { background:#fbfcfe; }
+tbody th { padding:8px 13px; white-space:nowrap; color:#263d57; font-size:.9rem; font-weight:620; }
+tbody td { padding:4px 6px; vertical-align:middle; }
+.cell { all:unset; box-sizing:border-box; display:block; min-height:43px; width:100%; border-radius:7px; cursor:pointer; padding:3px 7px; }
+.cell:focus-visible { outline:2px solid var(--focus); outline-offset:0; }
+.cell:hover { background:#eaf1f8; }
+.cell.hit { background:var(--accent-soft); color:#105659; }
+.cell.hit:hover { background:#d3efeb; }
+.cell.bad { color:var(--amber); }
+.cell .entry { display:flex; gap:5px 9px; flex-wrap:wrap; align-items:baseline; line-height:1.34; }
+.cell .val { font:700 .965rem/1.3 var(--mono); }
+.cell .clock { font:600 .875rem/1.3 var(--mono); }
+.cell .day { display:block; font:.78rem/1.36 var(--mono); margin-top:1px; }
+.cell .entry-status { display:block; font-size:.855rem; }
+.cell .small { color:var(--muted); font-size:.77rem; display:block; }
+.cell.none { color:#647386; cursor:default; }
+.timeline-key { display:flex; gap:8px 14px; align-items:center; flex-wrap:wrap; margin-bottom:9px; color:var(--muted); font-size:.875rem; }
+.legend-item { display:inline-flex; align-items:center; gap:5px; padding:2px 6px; background:#f4f7fa; border-radius:5px; color:#263c50; font:.875rem var(--mono); }
+.chart-scroll { overflow-x:auto; background:#fff; border:1px solid var(--soft); border-radius:11px; }
+#timelineSvg { display:block; width:100%; height:auto; min-width:760px; }
+.plot-mark { cursor:pointer; }
+.plot-mark:focus-visible { outline:none; }
+.plot-mark .halo { opacity:0; }
+.plot-mark:focus-visible .halo,.plot-mark:hover .halo { opacity:1; }
+.empty { text-align:center; border:1px dashed #c2d4e1; border-radius:12px; background:#fbfdff; padding:24px; }
+.empty h3 { font-size:1rem; }
+.empty p { font-size:.9rem; color:var(--muted); margin-top:5px; }
+.methods { margin-top:15px; padding:12px 20px; font-size:.9rem; }
+.methods summary { cursor:pointer; color:#244560; font-weight:650; }
+.methods li { color:var(--muted); margin-block:6px; }
+.methods ul { margin-block:10px; padding-inline-start:1.25rem; }
+.methods p { color:#455b70; padding:0 0 3px; }
+dialog { position:fixed; background:#fff; color:var(--ink); border:1px solid var(--soft); border-radius:15px; box-shadow:0 18px 65px #0c224245; max-width:min(600px,calc(100% - 26px)); width:600px; padding:0; }
+dialog::backdrop { background:#0b213a69; }
+.dialog-head { display:flex; justify-content:space-between; align-items:center; gap:7px; background:#f1f6f9; border-bottom:1px solid var(--soft); padding:13px 17px; }
+.dialog-head h2 { font-size:1.06rem; }
+#detailBody { padding:15px 17px 18px; }
+.sample-status { margin-bottom:6px; color:#175b5d; font-weight:685; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 14px; margin:0; font-size:.91rem; align-items:start; }
+dt { color:var(--muted); }
+dd { margin:0; min-width:0; overflow-wrap:anywhere; }
+.where { padding:10px 11px; margin-top:11px; background:#edf3f7; line-height:1.54; border-radius:8px; font-size:.875rem; overflow-wrap:anywhere; }
+.ties { margin:5px 0 0; padding-left:20px; }
+.ties li + li { margin-top:4px; }
+.noscript { padding:16px; }
+@media (max-width:960px) {
+  .shell { width:calc(100% - 42px); }
+  .hero-scope { display:none; }
+  .metrics { gap:9px; }
+  .metric { padding:12px; }
+}
+@media (max-width:655px) {
+  .shell { width:calc(100% - 24px); }
+  .hero { padding-block:17px 22px; }
+  .hero-main { margin-top:13px; }
+  main.shell { padding-top:12px; }
+  .ingest-main,.ingest-foot,.work-head,.toolbar,.view-status,.results,.methods { padding-inline:12px; }
+  .metrics { grid-template-columns:1fr 1fr; margin-block:10px; }
+  .metric { min-height:108px; }
+  .metric:last-child { grid-column:1/-1; min-height:auto; }
+  .metric-main { line-height:1.3; }
+  .filters { gap:7px 12px; }
+  .filters label { flex-wrap:wrap; }
+  .work-head p { display:none; }
+  #detailBody { padding-inline:12px; }
+  dl { column-gap:8px; }
+}
+@media (max-width:390px) {
+  .metrics { grid-template-columns:1fr; }
+  .metric { min-height:auto; }
+  .product { letter-spacing:.07em; }
+}
+@media print {
+  .actions,.toolbar,dialog { display:none !important; }
+  .shell { width:100%; }
+  .masthead { color:#17263a; background:white; border-top:0; }
+  .hero p,.product,.hero-scope,.hero-scope b { color:#17263a; }
+  .panel { box-shadow:none; }
+  tr { break-inside:avoid; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="shell hero">
+    <div class="product"><span class="product-mark" aria-hidden="true"><i></i><i></i><i></i></span>A2B <span class="product-divider">/</span> SCRIPT LOG ANALYZER</div>
+    <div class="hero-main">
+      <div>
+        <h1>A2B 寄存器首现看板</h1>
+        <p>按链路和节点找出首个非零读数，并定位到原始日志行。</p>
+      </div>
+      <div class="hero-scope" aria-label="目标寄存器">
+        <span>主节点 <b>0x73 · 0x2D / 2E / 2F</b></span>
+        <span>从 1–10 <b>0x2D / 2E / 2F</b></span>
+      </div>
+    </div>
+  </div>
+</header>
+<main class="shell">
+  <section id="dropzone" class="panel ingest" aria-labelledby="datasetTitle">
+    <div class="ingest-main">
+      <div class="data-source">
+        <div class="source-mark" aria-hidden="true">LOG</div>
+        <div>
+          <h2 id="datasetTitle">读取数据中</h2>
+          <p id="datasetRange" class="dataset-range"></p>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn primary" id="filePick">导入日志</button>
+        <button type="button" class="btn" id="folderPick">导入文件夹</button>
+        <button type="button" class="btn" id="restore" hidden>恢复本次首现汇总</button>
+        <input type="file" id="files" multiple accept=".log,.txt,.script,text/plain" hidden>
+        <input type="file" id="folder" webkitdirectory multiple hidden>
+      </div>
+    </div>
+    <div class="ingest-foot">
+      <span>可拖入或多选 .log、.txt、.script；需包含执行时间和读回值。</span>
+      <span class="local"><i aria-hidden="true"></i>仅在浏览器处理，不上传</span>
+    </div>
+    <p class="notice" id="importMsg" role="status" hidden></p>
+  </section>
+
+  <section id="metrics" class="metrics" aria-label="首现概览"></section>
+
+  <section class="panel workspace" aria-labelledby="workspaceTitle">
+    <div class="work-head">
+      <div>
+        <h2 id="workspaceTitle">节点首现明细</h2>
+        <p>同一链路内按主节点、从 1 到从 10 展开。</p>
+      </div>
+      <div class="actions export">
+        <button class="btn" type="button" id="saveSvg" hidden>导出 SVG</button>
+        <button class="btn" type="button" id="saveCsv">导出 CSV</button>
+      </div>
+    </div>
+    <div class="toolbar">
+      <div class="views" role="group" aria-label="结果视图">
+        <button id="viewMatrix" type="button" aria-pressed="true">节点矩阵</button>
+        <button id="viewTimeline" type="button" aria-pressed="false">首现时间轴</button>
+      </div>
+      <div class="filters">
+        <label>读取范围 <select id="scope"><option value="all">全部读取</option><option value="repeat">仅巡检轮次</option></select></label>
+        <label>链路 <select id="chain"><option value="all">所有链路</option></select></label>
+        <label>寄存器 <select id="reg"><option value="all">全部寄存器</option><option value="115">0x73</option><option value="45">0x2D</option><option value="46">0x2E</option><option value="47">0x2F</option></select></label>
+      </div>
+    </div>
+    <div id="viewStatus" class="view-status" aria-live="polite"></div>
+    <div id="results" class="results"></div>
+  </section>
+
+  <details class="panel methods">
+    <summary>解析口径与日志质量</summary>
+    <ul>
+      <li>时间取每轮 <code>Compile Start</code>，保持日志原时钟，不换算时区。时间轴上的同轮事件共享时间戳，点击可查日志行；不能当作故障真实发生时刻。</li>
+      <li>当前匹配主/从访问地址 <code>0x68/0x69</code>、<code>0x6A/0x6B</code>、<code>0x6C/0x6D</code>。主地址读回属于主节点；从地址按本轮该主地址最近一次成功写 <code>0x18 = 0x01…0x0A</code> 区分从 1–10。选节点失败后不猜测归属，直至成功重选。</li>
+      <li>只把成功读取且读回值非 <code>0x00</code> 的记录判为命中；写入值、失败读和缺值不纳入。<code>Repeat Times</code> 标识巡检轮次；「全部读取」同时保留初始化等无轮次标记的读取。</li>
+    </ul>
+    <p id="quality"></p>
+  </details>
+</main>
+<dialog id="detail" aria-labelledby="detailTitle">
+  <div class="dialog-head"><h2 id="detailTitle">读回详情</h2><button type="button" id="closeDetail" class="btn" autofocus>关闭</button></div>
+  <div id="detailBody"></div>
+</dialog>
+<noscript><p class="noscript">请启用 JavaScript。在浏览器中打开此文件即可离线使用。</p></noscript>
+<script type="application/json" id="firstSnapshot">{"pairs":[[104,105],[106,107],[108,109]],"fileCount":70,"modes":{"all":{"from":1795205140000,"to":1795459591000,"rows":[[104,0,47,3,1795205140000,33],[108,0,47,3,1795205276000,33],[106,0,47,3,1795205323000,33],[108,0,45,3,1795205406000,8],[106,6,45,3,1795212159000,34],[108,4,46,3,1795212159000,1],[104,2,47,3,1795220559000,6],[104,3,47,3,1795220559000,6],[104,7,46,3,1795220559000,2],[104,9,47,3,1795220559000,6],[108,5,46,3,1795220559000,1],[104,3,46,3,1795228959000,1],[104,4,46,3,1795228959000,2],[104,5,47,3,1795228959000,1],[104,6,46,3,1795228959000,1],[106,2,45,3,1795228959000,131],[106,3,47,3,1795228959000,7],[106,4,46,3,1795228959000,131],[106,8,46,3,1795228959000,131],[108,1,45,3,1795228959000,1],[108,8,46,3,1795228959000,1],[108,9,46,3,1795228959000,1],[104,0,46,3,1795245159000,253],[104,8,46,3,1795246959000,1],[104,1,47,3,1795252359000,45],[104,2,45,3,1795252359000,1],[108,2,46,3,1795252359000,1],[104,8,47,3,1795252959000,6],[106,7,46,3,1795252959000,169],[108,10,46,3,1795252959000,1],[104,1,45,3,1795253559000,14],[104,7,47,3,1795253559000,4],[104,10,46,3,1795253559000,65],[106,2,46,3,1795253559000,39],[106,7,45,3,1795253559000,5],[106,7,47,3,1795253559000,33],[106,8,47,3,1795253559000,33],[106,2,47,3,1795254159000,1],[106,4,47,3,1795254159000,1],[106,10,45,3,1795254159000,87],[108,1,47,3,1795254159000,1],[108,2,47,3,1795254159000,1],[104,9,46,3,1795254759000,65],[108,7,45,3,1795254759000,1],[108,4,47,3,1795257759000,1],[104,2,46,3,1795261359000,133],[106,8,45,3,1795261359000,50],[106,9,45,3,1795261359000,7],[108,5,45,3,1795261359000,1],[104,1,46,3,1795262559000,1],[108,10,47,3,1795262559000,1],[104,6,45,3,1795263759000,1],[108,2,45,3,1795263759000,1],[106,0,115,3,1795264959000,34],[106,3,45,3,1795264959000,8],[106,4,45,3,1795264959000,8],[106,5,45,3,1795264959000,8],[104,8,45,3,1795265559000,1],[104,9,45,3,1795266759000,1],[106,9,47,3,1795267959000,255],[104,3,45,3,1795269759000,5],[104,4,45,3,1795269759000,3],[104,10,45,3,1795269759000,87],[108,4,45,3,1795269759000,1],[104,7,45,3,1795277559000,87],[106,10,47,3,1795277559000,255],[106,1,45,3,1795278159000,1],[106,9,46,3,1795278159000,1],[104,4,47,3,1795285959000,6],[104,10,47,3,1795301559000,1],[104,5,46,3,1795302759000,33],[104,6,47,3,1795302759000,33],[106,1,47,3,1795302759000,67],[106,3,46,3,1795302759000,67],[106,5,47,3,1795302759000,87],[104,0,115,3,1795302759000,13],[104,0,45,3,1795303959000,32],[106,6,46,3,1795318959000,88],[106,6,47,3,1795318959000,3],[106,10,46,3,1795318959000,3],[104,5,45,3,1795342959000,1],[108,3,47,3,1795342959000,1],[106,0,45,3,1795352559000,254],[108,6,47,3,1795359759000,1],[108,5,47,3,1795363959000,1],[108,7,47,3,1795375959000,1],[106,0,46,3,1795384959000,16],[108,9,47,3,1795402359000,1],[108,7,46,3,1795423959000,1],[108,8,45,3,1795425759000,1],[106,1,46,3,1795433559000,169],[108,3,45,3,1795441359000,1],[108,1,46,3,1795443159000,1],[108,8,47,3,1795457191000,1],[106,5,46,1],[108,0,115,1],[108,0,46,1],[108,3,46,1],[108,6,45,1],[108,6,46,1],[108,9,45,1],[108,10,45,1]]},"repeat":{"from":1795205406000,"to":1795459591000,"rows":[[108,0,45,3,1795205406000,8],[106,6,45,3,1795212159000,34],[108,4,46,3,1795212159000,1],[104,2,47,3,1795220559000,6],[104,3,47,3,1795220559000,6],[104,7,46,3,1795220559000,2],[104,9,47,3,1795220559000,6],[108,5,46,3,1795220559000,1],[104,3,46,3,1795228959000,1],[104,4,46,3,1795228959000,2],[104,5,47,3,1795228959000,1],[104,6,46,3,1795228959000,1],[106,2,45,3,1795228959000,131],[106,3,47,3,1795228959000,7],[106,4,46,3,1795228959000,131],[106,8,46,3,1795228959000,131],[108,1,45,3,1795228959000,1],[108,8,46,3,1795228959000,1],[108,9,46,3,1795228959000,1],[108,0,47,3,1795237959000,8],[104,0,46,3,1795245159000,253],[104,8,46,3,1795246959000,1],[104,1,47,3,1795252359000,45],[104,2,45,3,1795252359000,1],[108,2,46,3,1795252359000,1],[104,8,47,3,1795252959000,6],[106,7,46,3,1795252959000,169],[108,10,46,3,1795252959000,1],[104,1,45,3,1795253559000,14],[104,7,47,3,1795253559000,4],[104,10,46,3,1795253559000,65],[106,2,46,3,1795253559000,39],[106,7,45,3,1795253559000,5],[106,7,47,3,1795253559000,33],[106,8,47,3,1795253559000,33],[106,2,47,3,1795254159000,1],[106,4,47,3,1795254159000,1],[106,10,45,3,1795254159000,87],[108,1,47,3,1795254159000,1],[108,2,47,3,1795254159000,1],[104,9,46,3,1795254759000,65],[108,7,45,3,1795254759000,1],[108,4,47,3,1795257759000,1],[104,2,46,3,1795261359000,133],[106,8,45,3,1795261359000,50],[106,9,45,3,1795261359000,7],[108,5,45,3,1795261359000,1],[104,0,47,3,1795261959000,8],[104,1,46,3,1795262559000,1],[108,10,47,3,1795262559000,1],[104,6,45,3,1795263759000,1],[108,2,45,3,1795263759000,1],[106,0,115,3,1795264959000,34],[106,3,45,3,1795264959000,8],[106,4,45,3,1795264959000,8],[106,5,45,3,1795264959000,8],[104,8,45,3,1795265559000,1],[104,9,45,3,1795266759000,1],[106,9,47,3,1795267959000,255],[104,3,45,3,1795269759000,5],[104,4,45,3,1795269759000,3],[104,10,45,3,1795269759000,87],[108,4,45,3,1795269759000,1],[104,7,45,3,1795277559000,87],[106,10,47,3,1795277559000,255],[106,0,47,3,1795278159000,254],[106,1,45,3,1795278159000,1],[106,9,46,3,1795278159000,1],[104,4,47,3,1795285959000,6],[104,10,47,3,1795301559000,1],[104,5,46,3,1795302759000,33],[104,6,47,3,1795302759000,33],[106,1,47,3,1795302759000,67],[106,3,46,3,1795302759000,67],[106,5,47,3,1795302759000,87],[104,0,115,3,1795302759000,13],[104,0,45,3,1795303959000,32],[106,6,46,3,1795318959000,88],[106,6,47,3,1795318959000,3],[106,10,46,3,1795318959000,3],[104,5,45,3,1795342959000,1],[108,3,47,3,1795342959000,1],[106,0,45,3,1795352559000,254],[108,6,47,3,1795359759000,1],[108,5,47,3,1795363959000,1],[108,7,47,3,1795375959000,1],[106,0,46,3,1795384959000,16],[108,9,47,3,1795402359000,1],[108,7,46,3,1795423959000,1],[108,8,45,3,1795425759000,1],[106,1,46,3,1795433559000,169],[108,3,45,3,1795441359000,1],[108,1,46,3,1795443159000,1],[108,8,47,3,1795457191000,1],[106,5,46,1],[108,0,115,1],[108,0,46,1],[108,3,46,1],[108,6,45,1],[108,6,46,1],[108,9,45,1],[108,10,45,1]]}}}</script>
+<script>
+/* A2B Script transcript reader. Time stamps are the log clock, not a time zone. */
+const A2B = (() => {
+  const PAIRS = Object.freeze([[0x68,0x69],[0x6A,0x6B],[0x6C,0x6D]].map(Object.freeze));
+  const REGS = Object.freeze([0x73,0x2D,0x2E,0x2F]);
+  const REGSET = new Set(REGS);
+  const WHY = Object.freeze({1:"读命令失败",2:"无配套读回值",3:"读回值格式无效或起始地址不符"});
+  const SELECT = 0x18;
+  const hex = n => Number.isInteger(n) ? "0x"+n.toString(16).toUpperCase().padStart(2,"0") : "—";
+  const labelNode = n => n ? "从 "+n : "主节点";
+  function hexNum(s) {
+    if (typeof s !== "string" || !/^(?:0[xX])?[0-9A-Fa-f]+$/.test(s)) return NaN;
+    const n = Number.parseInt(s.replace(/^0x/i,""),16);
+    return n <= 0xFF ? n : NaN;
+  }
+  const good = s => /^\s*OK\s*$/i.test(s);
+  // UTC fields are used only as sortable arithmetic; never convert to local browser time.
+  function clock(text) {
+    const m = String(text).match(/^\s*(\d{4})[/-](\d{1,2})[/-](\d{1,2})[ T](\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?\s*$/);
+    if (!m) return null;
+    const [y,M,d,h,min,s] = m.slice(1,7).map(Number);
+    const ms = Number((m[7] || "").padEnd(3,"0"));
+    const t = Date.UTC(y,M-1,d,h,min,s,ms), date=new Date(t);
+    if (date.getUTCFullYear()!==y || date.getUTCMonth()!==M-1 || date.getUTCDate()!==d ||
+        date.getUTCHours()!==h || date.getUTCMinutes()!==min || date.getUTCSeconds()!==s) return null;
+    return t;
+  }
+  function stamp(t) {
+    if (!Number.isFinite(t)) return "—";
+    const z=new Date(t).toISOString().replace("T"," ");
+    return t%1000 ? z.slice(0,23) : z.slice(0,19);
+  }
+  const CMD = /^\s*\[CMD\s*@\s*L(\d+)\]\s+(\w+)\s+\[Param\]\s*(.*?)\s*[:：]\s*([^\r\n]*)$/i;
+  const READ_VALUE = /^\s*Read\s+Value\s*[:：]\s*([^,;\s]+)\s*[,;]?\s*$/i;
+  const BURST_VALUE = /^\s*Burst\s+Read\s+from\s+Reg\s*((?:0x)*[0-9a-f]+)\s*,\s*RegData\s*[:：]\s*(.*)$/i;
+  const sortName = (a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+  function parse(sources, pairs=PAIRS) {
+    const pairByAddr = new Map();
+    for(const [m,s] of pairs){
+      pairByAddr.set(m,{base:m,main:true});
+      pairByAddr.set(s,{base:m,main:false});
+    }
+    const files=[], runs=[], seen=new Set();
+    const quality={badHeaders:0, noHeaderFiles:[], noTargetFiles:[], untimed:0, unassigned:0,
+      selectFailed:0, contextFailed:0, otherAddr:0, rawCommands:0};
+    for(const {name, text} of [...sources].sort(sortName)){
+      const f=files.push(name)-1;
+      let run=null, chip=null, mode=null, selected=new Map(), pending=null;
+      let fileRuns=0, fileRows=0, haveCommand=false;
+      const lines=text.replace(/^\uFEFF/,"").split(/\r\n|\n|\r/);
+      function emit(entry, val, reason=0) {
+        if(!run) return;
+        run[4].push([entry.base,entry.node,entry.reg,val,entry.line,entry.cmd,reason]);
+        fileRows++;
+        seen.add(entry.base);
+      }
+      function flush() {
+        if(pending){for(const t of pending.targets) emit(t,null,2);pending=null;}
+      }
+      for(let ix=0;ix<lines.length;ix++){
+        const line=lines[ix], lineNo=ix+1;
+        if(/\bCompile\s+Start\s*[:：]/i.test(line)){
+          flush(); chip=null; mode=null; selected=new Map(); run=null;
+          const m=line.match(/Compile\s+Start\s*[:：]\s*(.*?)\s*(?:\s+-{2,}\s*)?$/i);
+          const t=clock(m ? m[1] : "");
+          if(t!==null){run=[f,t,null,lineNo,[]];runs.push(run);fileRuns++;}
+          else quality.badHeaders++;
+          continue;
+        }
+        const rep=line.match(/Repeat\s+Times\s*[:：]\s*(\d+)/i);
+        if(rep && run && !/^\s*\[CMD\b/i.test(line)){
+          if(run[2]===null) run[2]=Number(rep[1]);
+          continue;
+        }
+        if(pending){
+          if(!line.trim()) continue;
+          const pv=pending;
+          const right=pv.burst ? BURST_VALUE.exec(line) : READ_VALUE.exec(line);
+          if(right){
+            pending=null;
+            const values=pv.burst ? right[2].split(/[,\s]+/).filter(Boolean).map(hexNum) : [hexNum(right[1])];
+            const correctBase = !pv.burst || hexNum(right[1].replace(/^(?:0x)+/i,""))===pv.address;
+            for(const t of pv.targets){
+              const v=values[t.reg-pv.address];
+              emit(t,correctBase && Number.isInteger(v) ? v : null,
+                !correctBase || Number.isNaN(v) ? 3 : v===undefined ? 2 : 0);
+            }
+            continue;
+          }
+          if(/^\s*(?:Read\s+Value|Burst\s+Read\s+from)\b/i.test(line)){
+            pending=null;
+            for(const t of pv.targets) emit(t,null,3);
+            continue;
+          }
+          flush();
+        }
+        const c=CMD.exec(line);
+        if(!c) {
+          if(/^\s*(?:IIC(?:Burst)?(?:Read|Write)|SetChipAddr|SetIICMode)\b/i.test(line)) quality.rawCommands++;
+          continue;
+        }
+        haveCommand=true;
+        const [,cmdStr,opRaw,argStr,status]=c;
+        const cmd=Number(cmdStr), op=opRaw.toLowerCase(), args=argStr.split(/\s+/);
+        const a=hexNum(args[0]), ok=good(status);
+        if(op==="setiicmode"){
+          mode=ok ? args[0].toUpperCase() : "UNKNOWN";
+          if(!ok){selected.clear();quality.contextFailed++;}
+          continue;
+        }
+        if(op==="setchipaddr"){
+          chip=ok && Number.isInteger(a) ? a : null;
+          if(chip===null){selected.clear();quality.contextFailed++;}
+          continue;
+        }
+        if(mode!==null && mode!=="A8D8") continue;
+        const pair=pairByAddr.get(chip);
+        if(op==="iicwrite" || op==="iicburstwrite"){
+          const idx=SELECT-a+1;
+          if(pair?.main && (op==="iicwrite" ? a===SELECT : idx>=1 && idx<args.length)){
+            if(!ok) quality.selectFailed++;
+            const v=ok ? hexNum(args[idx]) : NaN;
+            if(v>=1 && v<=10) selected.set(pair.base,v);
+            else selected.delete(pair.base);
+          }
+          continue;
+        }
+        if(!(op==="iicread" || op==="iicburstread") || !Number.isInteger(a)) continue;
+        const burst=op==="iicburstread";
+        const count=burst ? (/^\d+$/.test(args[1]||"") ? Number(args[1]) : hexNum(args[1])) : 1;
+        if(!(count>=1 && count<=256)) continue;
+        const rr=burst ? REGS.filter(n => n>=a && n<a+count) : REGSET.has(a) ? [a] : [];
+        if(!rr.length) continue;
+        if(!run){quality.untimed+=rr.length;continue;}
+        if(!pair){quality.otherAddr+=rr.length;continue;}
+        const wanted=pair.main ? rr : rr.filter(r=>r!==0x73);
+        if(!wanted.length) continue;
+        const node=pair.main ? 0 : selected.get(pair.base);
+        if(node===undefined){quality.unassigned+=wanted.length;continue;}
+        const targets=wanted.map(reg=>({base:pair.base,node,reg,line:lineNo,cmd}));
+        if(ok) pending={address:a,burst,targets};
+        else for(const t of targets) emit(t,null,1);
+      }
+      flush();
+      if(!fileRuns) quality.noHeaderFiles.push([f,haveCommand?1:0]);
+      else if(!fileRows) quality.noTargetFiles.push(f);
+    }
+    runs.sort((a,b)=>a[1]-b[1] || a[0]-b[0] || a[3]-b[3]);
+    return {version:1,files,runs,quality,pairs:pairs.filter(p=>seen.has(p[0]))};
+  }
+  const key=(base,node,reg)=>[base,node,reg].join("/");
+  function analyze(data,{mode="all", base="all", reg="all"}={}){
+    const pairs=data.pairs.filter(p=>base==="all" || Number(base)===p[0]);
+    const rr=REGS.filter(r=>reg==="all"||Number(reg)===r);
+    const cells=new Map();
+    for(const [main] of pairs) for(let n=0;n<=10;n++) for(const r of rr){
+      if(n && r===0x73) continue;
+      cells.set(key(main,n,r),{base:main,node:n,reg:r,ok:0,zeros:0,nonzeros:0,invalid:0,
+        first:null,prev:null,last:null,lastBad:null});
+    }
+    let first=null, firstRemote=null, goodReads=0, invalidReads=0, nonzeroReads=0, rounds=0, from=null, to=null;
+    const topTies=new Set();
+    const sameRemote=[];
+    for(const [file,time,repeat,hline,rows] of data.runs){
+      if(mode==="repeat" && repeat===null) continue;
+      const info={file:data.files[file],time,repeat,hline};
+      let hasTarget=false;
+      for(const [b,n,r,value,line,cmd,reason] of rows) {
+        const id=key(b,n,r), cell=cells.get(id);
+        if(!cell) continue;
+        hasTarget=true;
+        const item={...info,value,line,cmd,reason,base:b,node:n,reg:r};
+        if(reason){cell.invalid++;cell.lastBad=item;invalidReads++;continue;}
+        cell.ok++;goodReads++;
+        if(value!==0){
+          cell.nonzeros++;nonzeroReads++;
+          if(!cell.first){
+            cell.first=item;cell.prev=cell.last;
+            if(!first) first=item;
+            if(first.time===time) topTies.add(id);
+            if(n){
+              if(!firstRemote) firstRemote=item;
+              if(firstRemote.time===time) sameRemote.push(item);
+            }
+          }
+        } else cell.zeros++;
+        cell.last=item;
+      }
+      if(hasTarget){rounds++;if(from===null) from=time;to=time;}
+    }
+    return {pairs,regs:rr,cells,first,firstRemote,sameRemote,goodReads,invalidReads,nonzeroReads,rounds,from,to,
+      hits:[...cells.values()].filter(c=>c.first).length,topTies:topTies.size};
+  }
+  return Object.freeze({PAIRS,REGS,WHY,SELECT,hex,stamp,clock,key,labelNode,parse,analyze});
+})();
+if (typeof module === "object" && module.exports) module.exports = A2B;
+
+(() => {
+  "use strict";
+  const $=id=>document.getElementById(id);
+  const {REGS,WHY,hex,stamp,key,labelNode,parse,analyze}=A2B;
+  const h=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
+  const num=n=>n.toLocaleString("zh-CN");
+  const shared=JSON.parse($("firstSnapshot").textContent);
+  function sharedModel({mode="all",base="all",reg="all"}={}){
+    const {rows,from,to}=shared.modes[mode];
+    const pairs=shared.pairs.filter(p=>base==="all" || Number(base)===p[0]);
+    const regs=REGS.filter(r=>reg==="all" || Number(reg)===r);
+    const cells=new Map();
+    let first=null,firstRemote=null,topTies=0,hits=0,hasValid=false;
+    const sameRemote=[];
+    for(const [b,node,r,status,time,value] of rows){
+      if((base!=="all" && b!==Number(base)) || !regs.includes(r)) continue;
+      const p=status===3?{base:b,node,reg:r,time,value}:null;
+      cells.set(key(b,node,r),{base:b,node,reg:r,first:p,ok:status===1||status===3,invalid:status===2});
+      if(status===1||status===3) hasValid=true;
+      if(p){
+        hits++;
+        if(!first) first=p;
+        if(p.time===first.time) topTies++;
+        if(node){
+          if(!firstRemote) firstRemote=p;
+          if(p.time===firstRemote.time) sameRemote.push(p);
+        }
+      }
+    }
+    return {pairs,regs,cells,first,firstRemote,topTies,sameRemote,hits,goodReads:hasValid,from,to};
+  }
+  const COLORS={115:"#955414",45:"#1667a2",46:"#6c4ba5",47:"#0d746a"};
+  const SHAPES={115:"◆",45:"●",46:"■",47:"▲"};
+  const supported=/\.(?:log|txt|script)$/i;
+  const state={data:null,source:"empty",view:"matrix",serial:0,summary:null,cache:null,models:{}};
+  function chipFor(item) {
+    const pair=state.data?.pairs.find(p=>p[0]===item.base);
+    return item.node ? pair?.[1] : pair?.[0];
+  }
+  function setMessage(msg="",warning=false) {
+    const e=$("importMsg");
+    e.textContent=msg;e.hidden=!msg;e.classList.toggle("warn",warning);
+  }
+  function filters() {
+    return {base:$("chain").value,reg:$("reg").value,mode:$("scope").value};
+  }
+  function applyData(data,source) {
+    state.data=data;state.source=source;
+    state.cache=source==="shared"?sharedModel():data?analyze(data):null;
+    $("restore").hidden=source==="shared";
+    $("chain").replaceChildren(new Option("所有链路","all"));
+    for(const [base,remote] of data?.pairs ?? []) {
+      $("chain").append(new Option(hex(base)+" / "+hex(remote),String(base)));
+    }
+    $("scope").value="all";
+    $("reg").value="all";
+    $("datasetTitle").textContent=source==="shared" ? "实测首现汇总 · "+num(data.fileCount)+" 个日志" :
+      data ? "已导入 · "+num(data.files.length)+" 个日志文件" : "等待导入 Script 日志";
+    $("datasetRange").textContent=state.cache?.from!==null && state.cache?.from!==undefined ?
+      stamp(state.cache.from)+" 至 "+stamp(state.cache.to)+(source==="shared" ? " · 仅含实测首现，不含原始日志" : "") :
+      "选择包含 Compile Start 与 Read Value 的 Script 执行日志";
+    const q=data?.quality;
+    if(q){
+      const parts=[];
+      if(q.selectFailed) parts.push(num(q.selectFailed)+" 次从节点选址失败");
+      if(q.unassigned) parts.push(num(q.unassigned)+" 条从节点目标读命令无法归属，未计入节点统计");
+      if(q.untimed) parts.push(num(q.untimed)+" 条目标读命令无有效轮次时间");
+      if(q.otherAddr) parts.push(num(q.otherAddr)+" 条目标地址读取缺少链路上下文或不在当前映射");
+      if(q.contextFailed) parts.push(num(q.contextFailed)+" 次设备或 I²C 模式切换失败");
+      if(q.noHeaderFiles.length) parts.push(num(q.noHeaderFiles.length)+" 个文件没有可用 Compile Start");
+      if(q.noTargetFiles.length) parts.push(num(q.noTargetFiles.length)+" 个文件没有可归属目标读数");
+      $("quality").textContent="当前数据："+(parts.length ? parts.join("；")+"。" : "未发现归属或轮次时间问题。");
+    } else $("quality").textContent=source==="shared"?"共享版只包含首现汇总。导入原始日志后，可查看读取次数及日志行号。":"";
+    render();
+  }
+  function metricHtml(obj,label,tag,mode,remote=false) {
+    const first=remote ? obj?.firstRemote : obj?.first;
+    const title='<span class="metric-tag">'+label+' <span class="tag">'+tag+'</span></span>';
+    const ties=remote ? (obj?.sameRemote.length||0) : obj?.topTies;
+    if(!first) return '<div class="panel metric">'+title+'<span class="metric-main">'+(remote ? "无从节点命中" : obj?.goodReads ? "未见非零" : "无可定位读数")+'</span><span class="metric-meta">'+(remote ? "随读取范围和寄存器筛选变化" : mode==="repeat"?"匹配 Repeat Times 的执行轮次":"含未标记轮次的读取")+'</span></div>';
+    const when=stamp(first.time);
+    const day=when.slice(0,10), time=when.slice(11);
+    const loc=hex(first.base)+' 链路 · '+labelNode(first.node)+' · '+hex(first.reg);
+    return '<button type="button" class="panel metric" data-cell="'+key(first.base,first.node,first.reg)+'" data-mode="'+mode+'"'+(remote?' data-remote="1"':'')+' aria-label="'+h(label+"，"+when+"，"+loc+"，读回 "+hex(first.value)+(ties>1?"，同时间戳 "+ties+" 项":"")+"，查看详情")+'">'+title+
+      '<span class="metric-main"><span>'+day+'</span> <span>'+time+'</span></span><span class="metric-meta">'+loc+' = <b>'+hex(first.value)+'</b>'+
+      (ties>1 ? '<span class="metric-plural">同时间戳 '+num(ties)+' 项</span>' : '')+'</span></button>';
+  }
+  function empty(title,body) {
+    return '<div class="empty"><h3>'+h(title)+'</h3><p>'+h(body)+'</p></div>';
+  }
+  function cellMarkup(c,base,n,r) {
+    if(!c) return n && r===0x73 ? '<span class="cell none"><span class="entry-status">不适用</span></span>' : '—';
+    const id=key(base,n,r), label=hex(base)+" 链路 "+labelNode(n)+" "+hex(r);
+    if(c.first){
+      const t=stamp(c.first.time);
+      return '<button type="button" class="cell hit" data-cell="'+id+'" aria-label="'+h(label+'，'+t+' 首现 '+hex(c.first.value))+'">'+
+        '<span class="entry"><span class="val">'+hex(c.first.value)+'</span><span class="clock">'+t.slice(11)+'</span></span><span class="day">'+t.slice(0,10)+'</span></button>';
+    }
+    if(state.source==="shared" && (c.ok||c.invalid)) return '<span class="cell none"><span class="entry-status">'+(c.ok?"未见非零":"无有效读取")+'</span></span>';
+    if(c.ok) return '<button type="button" class="cell" data-cell="'+id+'" aria-label="'+h(label+"，未见非零")+'"><span class="entry-status">未见非零</span><span class="small">'+num(c.ok)+' 次有效读取'+(c.invalid?' · '+num(c.invalid)+' 次无效':'')+'</span></button>';
+    if(c.invalid) return '<button type="button" class="cell bad" data-cell="'+id+'" aria-label="'+h(label+"，无有效读取")+'"><span class="entry-status">无有效读取</span><span class="small">'+num(c.invalid)+' 次失败或缺值</span></button>';
+    return '<span class="cell none"><span class="entry-status">无记录</span></span>';
+  }
+  function matrix(m) {
+    const rs=m.regs, nodes=rs.length===1 && rs[0]===0x73 ? [0] : Array.from({length:11},(_,i)=>i);
+    return m.pairs.map(([base,remote])=>{
+      const subset=[...m.cells.values()].filter(c=>c.base===base);
+      const count=subset.filter(c=>c.first).length;
+      const title='主 '+hex(base)+' / 从 '+hex(remote);
+      return '<section class="chain-box" aria-label="链路 '+title+'"><div class="chain-head"><h3>链路 <span class="mono">'+title+'</span></h3>'+
+        '<span>出现非零 '+num(count)+' / '+num(subset.length)+' 项</span></div>'+
+        '<div class="table-scroll" role="region" aria-label="'+title+' 的寄存器结果" tabindex="0"><table'+(rs.length>2?' class="full"':'')+'><thead><tr><th scope="col">节点</th>'+
+        rs.map(r=>'<th scope="col"><code>'+hex(r)+'</code></th>').join("")+
+        '</tr></thead><tbody>'+nodes.map(n=>'<tr><th scope="row">'+labelNode(n)+'</th>'+
+          rs.map(r=>'<td>'+cellMarkup(m.cells.get(key(base,n,r)),base,n,r)+'</td>').join("")+'</tr>').join("")+
+        '</tbody></table></div></section>';
+    }).join("");
+  }
+  function marker(x,y,r) {
+    const fill=COLORS[r];
+    if(r===0x73) return '<polygon points="'+x+','+(y-4.7)+' '+(x+5.4)+','+y+' '+x+','+(y+4.7)+' '+(x-5.4)+','+y+'" fill="'+fill+'"/>';
+    if(r===0x2D) return '<circle cx="'+x+'" cy="'+y+'" r="4.1" fill="'+fill+'"/>';
+    if(r===0x2E) return '<rect x="'+(x-4)+'" y="'+(y-4)+'" width="8" height="8" rx="1" fill="'+fill+'"/>';
+    return '<polygon points="'+x+','+(y-4.6)+' '+(x+5.2)+','+(y+4)+' '+(x-5.2)+','+(y+4)+'" fill="'+fill+'"/>';
+  }
+  function timeline(m) {
+    const obs=[...m.cells.values()].filter(c=>c.first);
+    if(!obs.length) return empty("当前筛选没有首个非零读数","可切换链路或寄存器，或在节点矩阵区分全零与无有效读取。");
+    let min=Math.min(...obs.map(c=>c.first.time)),max=Math.max(...obs.map(c=>c.first.time));
+    const steps=[1000,5000,10000,30000,60000,300000,900000,1800000,3600000,7200000,14400000,
+      21600000,43200000,86400000,172800000,432000000,604800000,1209600000,2592000000];
+    if(min===max){min-=60000;max+=60000;}
+    const needed=(max-min)/6.5;
+    const stride=steps.find(t=>t>=needed) || Math.ceil(needed/86400000)*86400000;
+    const lo=Math.floor(min/stride)*stride, hi=Math.ceil(max/stride)*stride;
+    const width=1080, left=162, right=1026, head=52, row=40, group=29;
+    const sx=t=>Math.round((left+(t-lo)/(hi-lo)*(right-left))*100)/100;
+    const sets=m.pairs.map(([base,remote])=>{
+      const active=obs.filter(c=>c.base===base);
+      return {base,remote,rows:Array.from({length:11},(_,n)=>({n,cells:active.filter(c=>c.node===n)})).filter(v=>v.cells.length)};
+    }).filter(v=>v.rows.length);
+    const height=head+sets.reduce((s,g)=>s+group+row*g.rows.length,0)+12;
+    let y=head, groups="", marks="", ticks="";
+    for(let t=lo;t<=hi;t+=stride){
+      const x=sx(t), tstr=stamp(t);
+      const shown=(stride<60000 ? tstr.slice(11,19) : tstr.slice(5,16));
+      ticks+='<line x1="'+x+'" y1="41" x2="'+x+'" y2="'+(height-5)+'" stroke="#e2eaf1"/>'+
+        '<text x="'+x+'" y="35" text-anchor="middle" fill="#53657a" font-size="13" font-family="monospace">'+shown+'</text>';
+    }
+    for(const g of sets){
+      groups+='<rect x="0" y="'+y+'" width="'+width+'" height="'+group+'" fill="#eef3f8"/>'+
+        '<text x="16" y="'+(y+19)+'" fill="#273f5b" font-size="14" font-weight="650">链路 '+hex(g.base)+' / '+hex(g.remote)+'</text>';
+      y+=group;
+      for(const {n,cells} of g.rows){
+        const mid=y+row/2;
+        groups+='<line x1="0" x2="'+(width-1)+'" y1="'+(y+row)+'" y2="'+(y+row)+'" stroke="#edf1f5"/>'+
+          '<text x="30" y="'+(mid+4)+'" fill="#2a4059" font-size="14">'+labelNode(n)+'</text>';
+        for(const cell of cells){
+          const p=cell.first,r=cell.reg,x=sx(p.time);
+          const offset=m.regs.length===1 ? 0 : (REGS.indexOf(r)-1.5)*9;
+          const yy=mid+offset;
+          const tip=stamp(p.time)+' · '+hex(p.base)+' 链路 '+labelNode(p.node)+' · '+hex(r)+' = '+hex(p.value);
+          marks+='<g class="plot-mark" role="button" tabindex="0" data-cell="'+key(p.base,p.node,r)+'" aria-label="'+h(tip)+'">'+
+            '<title>'+h(tip)+'</title><rect x="'+(x-9)+'" y="'+(yy-4.5)+'" width="18" height="9" fill="transparent"/>'+
+            '<circle class="halo" opacity="0" cx="'+x+'" cy="'+yy+'" r="7" stroke="#213c4d" fill="none" pointer-events="none"/>'+marker(x,yy,r)+'</g>';
+        }
+        y+=row;
+      }
+    }
+    const legend=m.regs.map(r=>'<span class="legend-item"><span aria-hidden="true" style="color:'+COLORS[r]+'">'+SHAPES[r]+'</span>'+hex(r)+'</span>').join("");
+    const title=(state.source==="shared"?"实测首现汇总 · ":"")+"首个非零读回时间轴："+num(obs.length)+" 项";
+    return '<div class="timeline-key">'+legend+'<span>仅显示命中节点 · 可点击标记追溯</span></div><div class="chart-scroll" tabindex="0" role="region" aria-label="可横向滚动的时间轴">'+
+      '<svg xmlns="http://www.w3.org/2000/svg" id="timelineSvg" viewBox="0 0 '+width+' '+height+'" width="'+width+'" height="'+height+'" role="group" aria-labelledby="tsTitle tsDesc" font-family="system-ui, PingFang SC, Microsoft YaHei, sans-serif">'+
+      '<title id="tsTitle">'+title+'</title><desc id="tsDesc">横轴是 Compile Start 记录时间，纵轴分链路及节点。各标记为对应寄存器的第一个非零读回值。</desc>'+
+      '<rect width="'+width+'" height="'+height+'" fill="#fff"/>'+
+      '<text x="16" y="19" fill="#29445f" font-size="14" font-weight="650">'+(state.source==="shared"?"实测首现汇总 · ":"")+'记录时间（Compile Start）</text>'+
+      m.regs.map((r,i)=>{
+        const lx=width-77*(m.regs.length-i);
+        return marker(lx,15,r)+'<text x="'+(lx+9)+'" y="19" fill="#31475e" font-size="12" font-family="monospace">'+hex(r)+'</text>';
+      }).join("")+ticks+groups+marks+'</svg></div>';
+  }
+  function render() {
+    const f=filters();
+    const ds=state.data ?? {files:[],pairs:[],runs:[]};
+    const model=state.source==="shared" ? options=>sharedModel(options) : options=>analyze(ds,options);
+    const all=model({...f,mode:"all"}), repeat=model({...f,mode:"repeat"});
+    const m=f.mode==="repeat"?repeat:all;
+    state.models={all,repeat};state.summary=m;
+    $("metrics").innerHTML=metricHtml(all,"全部读取首现","含初始化","all")+metricHtml(repeat,"巡检轮次首现","Repeat Times","repeat")+
+      metricHtml(m,"从节点最早首现","当前筛选",f.mode,true);
+    $("viewStatus").innerHTML='<b>'+($("scope").selectedOptions[0]?.textContent || "全部读取")+'</b>　'+
+      num(m.pairs.length)+' 条链路 · 首现 '+num(m.hits)+' / '+num(m.cells.size)+' 项'+
+      (state.source==="shared"?' · 仅统计首个非零读回':' · '+num(m.goodReads)+' 次有效读取（'+num(m.nonzeroReads)+' 次非零）· '+num(m.invalidReads)+' 次失败或缺值 · '+num(m.rounds)+' 个有目标读取的轮次');
+    $("viewMatrix").setAttribute("aria-pressed",String(state.view==="matrix"));
+    $("viewTimeline").setAttribute("aria-pressed",String(state.view==="timeline"));
+    $("saveCsv").disabled=!m.cells.size;
+    $("saveSvg").hidden=state.view!=="timeline";
+    $("saveSvg").disabled=!m.hits;
+    $("results").innerHTML=!m.pairs.length ? empty(state.data?"没有可绘制的数据":"导入 Script 执行日志","日志需要 Compile Start、IICRead 及 Read Value，并能映射到目标链路。") :
+      state.view==="timeline" ? timeline(m) : matrix(m);
+  }
+  function showDetail(el) {
+    const m=state.models[el.dataset.mode] ?? state.summary, c=m?.cells.get(el.dataset.cell);
+    if(!c) return;
+    const p=c.first || c.last || c.lastBad;
+    const mode=el.dataset.mode || filters().mode;
+    const chip=chipFor(c);
+    const tied=el.dataset.remote ? m.sameRemote.filter(x=>x.base!==c.base || x.node!==c.node || x.reg!==c.reg) : [];
+    $("detailTitle").textContent=hex(c.base)+" 链路 · "+labelNode(c.node)+" · "+hex(c.reg);
+    const opts=mode==="repeat" ? "仅巡检轮次" : "全部读取";
+    const meaning=c.first ? "首个非零读回 "+hex(c.first.value) : c.ok ? "成功读回均为 0x00" : "没有有效读回";
+    if(state.source==="shared"){
+      $("detailBody").innerHTML='<p class="sample-status">'+meaning+'</p><dl><dt>读取范围</dt><dd>'+opts+'</dd><dt>访问地址</dt><dd><code>'+hex(chip)+'</code></dd>'+(p?'<dt>首现时间</dt><dd class="mono">'+stamp(p.time)+'</dd>':'')+'</dl>'+
+        (tied.length ? '<div class="where"><b>同一记录时刻的其他从节点首现</b><ul class="ties">'+tied.map(x=>'<li>'+hex(x.base)+' 链路 · '+labelNode(x.node)+' · <code>'+hex(x.reg)+' = '+hex(x.value)+'</code></li>').join("")+'</ul></div>' : '')+
+        '<div class="where">共享汇总不包含原始日志；导入日志后可追溯行号。</div>';
+      if(!$("detail").open) $("detail").showModal();
+      return;
+    }
+    $("detailBody").innerHTML='<p class="sample-status">'+meaning+'</p><dl>'+
+      '<dt>读取范围</dt><dd>'+opts+'</dd>'+
+      '<dt>访问地址</dt><dd><code>'+hex(chip)+'</code>'+(c.node?'；同轮先在主地址写 <code>0x18 = '+hex(c.node)+'</code>':'；主节点直接读取')+'</dd>'+
+      (p?'<dt>'+ (c.first ? "首现轮次" : "最近记录")+'</dt><dd class="mono">'+stamp(p.time)+(p.repeat!==null ? '　(Repeat '+p.repeat+')' : '')+'</dd>':'')+
+      (c.first?'<dt>上一次有效读回</dt><dd>'+(c.prev ? '<code>'+hex(c.prev.value)+'</code> · '+stamp(c.prev.time)+(c.prev.time===p.time ? '（同一记录时刻）':'') : '本范围没有更早的有效读数')+'</dd>':'')+
+      '<dt>读取次数</dt><dd>'+num(c.ok)+' 次有效：'+num(c.zeros)+' 次全零、'+num(c.nonzeros)+' 次非零；'+num(c.invalid)+' 次无效</dd>'+
+      (p?.reason ? '<dt>最近异常</dt><dd>'+WHY[p.reason]+'</dd>' : '')+'</dl>'+
+      (p?'<div class="where"><b>日志定位</b><br><code>'+h(p.file)+'</code> 第 <b>'+num(p.line)+'</b> 行（脚本 <code>[CMD@L'+p.cmd+']</code>，与第 '+num(p.hline)+' 行的轮次头对应）</div>':'')+
+      (tied.length ? '<div class="where"><b>同一记录时刻的其他从节点首现</b><ul class="ties">'+tied.map(x=>'<li>'+hex(x.base)+' 链路 · '+labelNode(x.node)+' · <code>'+hex(x.reg)+' = '+hex(x.value)+'</code><br><code>'+h(x.file)+'</code> 第 '+num(x.line)+' 行</li>').join("")+'</ul></div>' : '');
+    if(!$("detail").open) $("detail").showModal();
+  }
+  const clickCell=e=>{
+    const cell=e.target.closest("[data-cell]");
+    if(cell) showDetail(cell);
+  };
+  $("results").addEventListener("click",clickCell);
+  $("metrics").addEventListener("click",clickCell);
+  $("results").addEventListener("keydown",e=>{
+    if((e.key==="Enter" || e.key===" ") && e.target.classList.contains("plot-mark")){
+      e.preventDefault(); showDetail(e.target);
+    }
+  });
+  $("detail").addEventListener("click",e=>{if(e.target===$("detail")) $("detail").close();});
+  $("closeDetail").addEventListener("click",()=>{$("detail").close();});
+  function download(contents,name,type) {
+    const url=URL.createObjectURL(new Blob([contents],{type})), a=document.createElement("a");
+    a.href=url;a.download=name;document.body.append(a);a.click();a.remove();
+    window.setTimeout(()=>URL.revokeObjectURL(url),15000);
+  }
+  function csvValue(value) {
+    let s=String(value??"");
+    if(/^\s*[=+\-@]/.test(s)) s="'"+s;
+    return '"'+s.replace(/"/g,'""')+'"';
+  }
+  $("saveCsv").addEventListener("click",()=>{
+    const m=state.summary;
+    const rows=[["主地址","从访问地址","节点","寄存器","数据范围","状态","首个非零时间 (Compile Start)","首个非零值","轮次","日志文件","日志行号","脚本行号","有效读取数","非零读取数","无效读取数"]];
+    const isShared=state.source==="shared";
+    if(isShared) rows[0]=rows[0].slice(0,8);
+    for(const c of m.cells.values()){
+      const p=c.first;
+      const status=p ? "已出现非零" : c.ok ? "未见非零" : c.invalid ? "无有效读取" : "无记录";
+      rows.push([hex(c.base),c.node?hex(chipFor(c)):"",labelNode(c.node),hex(c.reg),
+        (state.source==="shared"?"实测首现汇总 · ":"")+(filters().mode==="repeat" ? "仅巡检轮次" : "全部读取"),status,p?stamp(p.time):"",p?hex(p.value):"",
+        ...(isShared?[]:[p?.repeat??"",p?.file??"",p?.line??"",p?.cmd??"",c.ok,c.nonzeros,c.invalid])]);
+    }
+    download("\uFEFF"+rows.map(row=>row.map(csvValue).join(",")).join("\r\n")+"\r\n",state.source==="shared"?"A2B-实测汇总-首个非零统计.csv":"A2B-首个非零统计.csv","text/csv;charset=utf-8");
+  });
+  $("saveSvg").addEventListener("click",()=>{
+    const svg=$("timelineSvg"); if(!svg) return;
+    const copy=svg.cloneNode(true);
+    copy.querySelectorAll("[tabindex]").forEach(e=>{e.removeAttribute("tabindex");e.removeAttribute("role");e.removeAttribute("data-cell");});
+    download(new XMLSerializer().serializeToString(copy),state.source==="shared"?"A2B-实测汇总-首现时间轴.svg":"A2B-首现时间轴.svg","image/svg+xml;charset=utf-8");
+  });
+  function decoded(buf) {
+    const b=new Uint8Array(buf);
+    if(b[0]===0xFF&&b[1]===0xFE) return new TextDecoder("utf-16le").decode(b);
+    if(b[0]===0xFE&&b[1]===0xFF) return new TextDecoder("utf-16be").decode(b);
+    try { return new TextDecoder("utf-8",{fatal:true}).decode(b); }
+    catch { return new TextDecoder("gb18030").decode(b); }
+  }
+  async function importLogs(input,isFolder=false) {
+    let files=[...input];
+    if(isFolder) files=files.filter(x=>supported.test(x.name));
+    const seen=new Set();
+    files=files.filter(f=>{
+      const k=JSON.stringify([f.webkitRelativePath||f.name,f.size,f.lastModified]);
+      if(seen.has(k)) return false;
+      seen.add(k);return true;
+    });
+    if(!files.length) { setMessage("没有找到 .log、.txt 或 .script 日志。",true);return; }
+    if(files.reduce((s,f)=>s+f.size,0)>128*1024*1024){
+      setMessage("所选日志超过 128 MB。请缩小到要分析的目录或文件范围后再导入。",true);return;
+    }
+    const serial=++state.serial;
+    setMessage("正在本地读取 "+num(files.length)+" 个文件…");
+    const resolved=await Promise.allSettled(files.map(async f=>({name:f.webkitRelativePath||f.name,text:decoded(await f.arrayBuffer())})));
+    if(serial!==state.serial) return;
+    const sources=resolved.filter(v=>v.status==="fulfilled").map(v=>v.value);
+    if(!sources.length){setMessage("所选文件无法读取，已保留当前结果。",true);return;}
+    try {
+      const imported=parse(sources);
+      applyData(imported,"imported");
+      const q=imported.quality, failed=files.length-sources.length;
+      if(!imported.pairs.length){
+        setMessage(q.rawCommands || imported.runs.length===0 ?
+          "未找到可统计的读回。若导入的是脚本命令源文件，请改用 Script 执行后导出的日志（包含时间和读回值）。" :
+          "这些文件包含轮次，但没有匹配目标寄存器与链路的记录；请在解析口径查看映射。",true);
+      } else {
+        const skipped=q.noHeaderFiles.length+q.noTargetFiles.length+failed;
+        const first="已载入 "+num(sources.length)+" 个文件；本次导入已替换上一次的数据。";
+        setMessage(first+(skipped ? " 有 "+num(skipped)+" 个文件不可读或无可统计记录。":""),Boolean(skipped));
+      }
+    } catch(e){setMessage("无法解析所选日志："+(e?.message||String(e)),true);}
+  }
+  for(const [picker,input] of [["filePick","files"],["folderPick","folder"]]){
+    $(picker).addEventListener("click",()=>$(input).click());
+    $(input).addEventListener("change",e=>{
+      const items=Array.from(e.target.files);e.target.value="";
+      if(items.length) importLogs(items,input==="folder");
+    });
+  }
+  $("restore").addEventListener("click",()=>{
+    state.serial++;applyData(shared,"shared");setMessage();
+  });
+  for(const which of ["scope","chain","reg"]) $(which).addEventListener("change",render);
+  $("viewMatrix").addEventListener("click",()=>{state.view="matrix";render();});
+  $("viewTimeline").addEventListener("click",()=>{state.view="timeline";render();});
+  const dz=$("dropzone");
+  const dragsFiles=e=>Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  for(const event of ["dragenter","dragover"]) dz.addEventListener(event,e=>{
+    if(dragsFiles(e)){
+      e.preventDefault();e.dataTransfer.dropEffect="copy";dz.classList.add("is-drop");
+    }
+  });
+  dz.addEventListener("dragleave",e=>{
+    if(!dz.contains(e.relatedTarget)) dz.classList.remove("is-drop");
+  });
+  dz.addEventListener("drop",e=>{
+    e.preventDefault();dz.classList.remove("is-drop");importLogs(e.dataTransfer.files);
+  });
+  document.addEventListener("dragover",e=>{if(dragsFiles(e))e.preventDefault();});
+  document.addEventListener("drop",e=>{if(dragsFiles(e))e.preventDefault();});
+  applyData(shared,"shared");
+})();
+
+</script>
+</body>
+</html>
