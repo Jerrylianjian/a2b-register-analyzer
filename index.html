@@ -194,6 +194,9 @@ dd { margin:0; min-width:0; overflow-wrap:anywhere; }
 .temperature-form label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:.875rem; }
 .temperature-form input { padding:6px 9px; min-height:35px; border-radius:7px; border:1px solid #c9d5e1; background:#fff; color:var(--ink); font:inherit; }
 .history-table td.temperature-value { color:#0b625a; font-weight:650; }
+
+.cell .first-temp { display:block; color:#145850; font-size:.815rem; margin-top:2px; font-weight:600; }
+.cell .first-temp.unavailable { color:var(--muted); font-weight:450; }
 </style>
 </head>
 <body>
@@ -369,7 +372,28 @@ const A2BTemperature = (() => {
     const raw=p.from+(p.to-p.from)*(within-p.offset)/p.duration;
     return {value:Math.round(raw*10)/10,phase:p.label};
   }
-  return Object.freeze({HIGH,LOW,RATE,HOLD,RAMP,PERIOD,terminalOffset,estimate});
+  function trace(from,to,profile){
+    if(!profile || !Number.isFinite(from) || !Number.isFinite(to) || !Number.isFinite(profile.anchor)) return null;
+    const backwards=profile.direction==="backward";
+    const phase=phases.find(x=>x.key===profile.phase);
+    if(!phase) return null;
+    const offset=backwards?terminalOffset(profile.phase,profile.terminalTemperature,profile.holdMinutes):phase.offset;
+    if(offset===null) return null;
+    const start=Math.max(from,backwards?profile.limit??-Infinity:profile.anchor);
+    const end=Math.min(to,backwards?profile.anchor:profile.end??Infinity);
+    if(start>end) return null;
+    const origin=profile.anchor-offset;
+    const firstCycle=Math.floor((start-origin)/PERIOD), lastCycle=Math.floor((end-origin)/PERIOD);
+    if(lastCycle-firstCycle>256) return {points:[],tooLong:true};
+    const times=[start];
+    for(let c=firstCycle;c<=lastCycle;c++) for(const p of phases){
+      const t=origin+c*PERIOD+p.offset;
+      if(t>start && t<end) times.push(t);
+    }
+    if(end!==start) times.push(end);
+    return {points:times.map(t=>[t,estimate(t,profile).value]),tooLong:false};
+  }
+  return Object.freeze({HIGH,LOW,RATE,HOLD,RAMP,PERIOD,terminalOffset,estimate,trace});
 })();
 if(typeof module==="object"&&module.exports) module.exports=A2BTemperature;
 
@@ -706,9 +730,12 @@ if (typeof module === "object" && module.exports) module.exports = A2B;
     if(!c) return n && r===0x73 ? '<span class="cell none"><span class="entry-status">不适用</span></span>' : '—';
     const id=key(base,n,r), label=hex(base)+" 链路 "+labelNode(n)+" "+hex(r);
     if(c.first){
-      const t=stamp(c.first.time);
-      return '<button type="button" class="cell hit" data-cell="'+id+'" aria-label="'+h(label+'，'+t+' 首现 '+hex(c.first.value))+'">'+
-        '<span class="entry"><span class="val">'+hex(c.first.value)+'</span><span class="clock">'+t.slice(11)+'</span></span><span class="day">'+t.slice(0,10)+'</span></button>';
+      const t=stamp(c.first.time), temp=tempAt(c.first.time);
+      const labelTemp=temp?"，估算箱温 "+temp.value.toFixed(1)+" ℃，"+temp.phase:state.temperature?"，不在温度估算范围内":"";
+      const tempLine=temp?'<span class="first-temp mono">'+temp.value.toFixed(1)+' ℃ · '+temp.phase+'</span>':
+        state.temperature?'<span class="first-temp unavailable">箱温未估算</span>':"";
+      return '<button type="button" class="cell hit" data-cell="'+id+'" aria-label="'+h(label+'，'+t+' 首现 '+hex(c.first.value)+labelTemp)+'">'+
+        '<span class="entry"><span class="val">'+hex(c.first.value)+'</span><span class="clock">'+t.slice(11)+'</span></span><span class="day">'+t.slice(0,10)+'</span>'+tempLine+'</button>';
     }
     if(state.source==="shared" && (c.ok||c.invalid)) return '<span class="cell none"><span class="entry-status">'+(c.ok?"未见非零":"无有效读取")+'</span></span>';
     if(c.ok) return '<button type="button" class="cell" data-cell="'+id+'" aria-label="'+h(label+"，未见非零")+'"><span class="entry-status">未见非零</span><span class="small">'+num(c.ok)+' 次有效读取'+(c.invalid?' · '+num(c.invalid)+' 次无效':'')+'</span></button>';
@@ -747,14 +774,31 @@ if (typeof module === "object" && module.exports) module.exports = A2B;
     const needed=(max-min)/6.5;
     const stride=steps.find(t=>t>=needed) || Math.ceil(needed/86400000)*86400000;
     const lo=Math.floor(min/stride)*stride, hi=Math.ceil(max/stride)*stride;
-    const width=1080, left=162, right=1026, head=52, row=40, group=29;
+    const width=1080, left=162, right=1026, row=40, group=29;
+    const trace=A2BTemperature.trace(lo,hi,state.temperature);
+    const head=trace?.points.length ? 163 : 52;
     const sx=t=>Math.round((left+(t-lo)/(hi-lo)*(right-left))*100)/100;
     const sets=m.pairs.map(([base,remote])=>{
       const active=obs.filter(c=>c.base===base);
       return {base,remote,rows:Array.from({length:11},(_,n)=>({n,cells:active.filter(c=>c.node===n)})).filter(v=>v.cells.length)};
     }).filter(v=>v.rows.length);
     const height=head+sets.reduce((s,g)=>s+group+row*g.rows.length,0)+12;
-    let y=head, groups="", marks="", ticks="";
+    let y=head, groups="", marks="", ticks="", therm="";
+    if(trace?.points.length){
+      const top=64,bottom=142,Y=t=>Math.round((bottom-(t+40)/145*(bottom-top))*100)/100;
+      therm='<rect x="0" y="52" width="'+width+'" height="101" fill="#edf8f6"/>'+
+        '<text x="16" y="83" fill="#145850" font-weight="650" font-size="14">估算箱温 (℃)</text>';
+      for(const t of [105,0,-40]){
+        const y=Y(t);
+        therm+='<line x1="'+left+'" x2="'+right+'" y1="'+y+'" y2="'+y+'" stroke="#bfdcd7"/>'+
+          '<text x="'+(left-10)+'" y="'+(y+4)+'" text-anchor="end" fill="#355b59" font-size="12">'+t+'</text>';
+      }
+      therm+='<polyline fill="none" stroke="#08756a" stroke-width="2" points="'+trace.points.map(([t,value])=>sx(t)+','+Y(value)).join(" ")+'"/>';
+      for(const t of new Set(obs.map(c=>c.first.time))){
+        const v=tempAt(t);if(!v)continue;
+        therm+='<circle cx="'+sx(t)+'" cy="'+Y(v.value)+'" r="2.7" fill="#08756a"><title>'+stamp(t)+' · 估算 '+v.value.toFixed(1)+' ℃ · '+v.phase+'</title></circle>';
+      }
+    }
     for(let t=lo;t<=hi;t+=stride){
       const x=sx(t), tstr=stamp(t);
       const shown=(stride<60000 ? tstr.slice(11,19) : tstr.slice(5,16));
@@ -773,7 +817,9 @@ if (typeof module === "object" && module.exports) module.exports = A2B;
           const p=cell.first,r=cell.reg,x=sx(p.time);
           const offset=m.regs.length===1 ? 0 : (REGS.indexOf(r)-1.5)*9;
           const yy=mid+offset;
-          const tip=stamp(p.time)+' · '+hex(p.base)+' 链路 '+labelNode(p.node)+' · '+hex(r)+' = '+hex(p.value);
+          const v=tempAt(p.time);
+          const tip=stamp(p.time)+' · '+hex(p.base)+' 链路 '+labelNode(p.node)+' · '+hex(r)+' = '+hex(p.value)+
+            (v?' · 估算箱温 '+v.value.toFixed(1)+' ℃ · '+v.phase:state.temperature?' · 箱温未估算':'');
           marks+='<g class="plot-mark" role="button" tabindex="0" data-cell="'+key(p.base,p.node,r)+'" aria-label="'+h(tip)+'">'+
             '<title>'+h(tip)+'</title><rect x="'+(x-9)+'" y="'+(yy-4.5)+'" width="18" height="9" fill="transparent"/>'+
             '<circle class="halo" opacity="0" cx="'+x+'" cy="'+yy+'" r="7" stroke="#213c4d" fill="none" pointer-events="none"/>'+marker(x,yy,r)+'</g>';
@@ -783,7 +829,8 @@ if (typeof module === "object" && module.exports) module.exports = A2B;
     }
     const legend=m.regs.map(r=>'<span class="legend-item"><span aria-hidden="true" style="color:'+COLORS[r]+'">'+SHAPES[r]+'</span>'+hex(r)+'</span>').join("");
     const title=(state.source==="shared"?"实测首现汇总 · ":"")+"首个非零读回时间轴："+num(obs.length)+" 项";
-    return '<div class="timeline-key">'+legend+'<span>仅显示命中节点 · 可点击标记追溯</span></div><div class="chart-scroll" tabindex="0" role="region" aria-label="可横向滚动的时间轴">'+
+    const tempNote=trace?.points.length?"绿色曲线为按程序估算的箱温，圆点对应首现时刻":trace?.tooLong?"显示跨度较长，温度请查首现标记与详情":state.temperature?"当前时段无温度估算":"设置温度基准后显示箱温";
+    return '<div class="timeline-key">'+legend+'<span>仅显示命中节点 · 可点击标记追溯</span><span>'+tempNote+'</span></div><div class="chart-scroll" tabindex="0" role="region" aria-label="可横向滚动的时间轴">'+
       '<svg xmlns="http://www.w3.org/2000/svg" id="timelineSvg" viewBox="0 0 '+width+' '+height+'" width="'+width+'" height="'+height+'" role="group" aria-labelledby="tsTitle tsDesc" font-family="system-ui, PingFang SC, Microsoft YaHei, sans-serif">'+
       '<title id="tsTitle">'+title+'</title><desc id="tsDesc">横轴是 Compile Start 记录时间，纵轴分链路及节点。各标记为对应寄存器的第一个非零读回值。</desc>'+
       '<rect width="'+width+'" height="'+height+'" fill="#fff"/>'+
@@ -791,7 +838,7 @@ if (typeof module === "object" && module.exports) module.exports = A2B;
       m.regs.map((r,i)=>{
         const lx=width-77*(m.regs.length-i);
         return marker(lx,15,r)+'<text x="'+(lx+9)+'" y="19" fill="#31475e" font-size="12" font-family="monospace">'+hex(r)+'</text>';
-      }).join("")+ticks+groups+marks+'</svg></div>';
+      }).join("")+therm+ticks+groups+marks+'</svg></div>';
   }
   const PAGE_SIZE=100;
   function collectHistory(){
@@ -1033,12 +1080,13 @@ if (typeof module === "object" && module.exports) module.exports = A2B;
       const label=select.selectedOptions[0]?.textContent||"已选阶段";
       $("tempStatus").textContent="已按 "+stamp(anchor)+"（"+label+"）对齐"+(limit===null?"，按连续循环估算。":"，估算至 "+stamp(limit)+"。");
     }
-    if(state.view!=="history"){state.view="history";render();}
-    else renderHistory(false);
+    if(state.view==="history") renderHistory(false);
+    else render();
   });
   $("clearTemp").addEventListener("click",()=>{
     clearProfile();
     if(state.view==="history") renderHistory(false);
+    else render();
   });
   for(const which of ["scope","chain","reg"]) $(which).addEventListener("change",()=>{state.historyPage=0;render();});
   for(const which of ["historyNode","historyDay","historyKind"]) $(which).addEventListener("change",()=>{state.historyPage=0;renderHistory();});

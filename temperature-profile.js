@@ -35,6 +35,27 @@ const A2BTemperature = (() => {
     const raw=p.from+(p.to-p.from)*(within-p.offset)/p.duration;
     return {value:Math.round(raw*10)/10,phase:p.label};
   }
-  return Object.freeze({HIGH,LOW,RATE,HOLD,RAMP,PERIOD,terminalOffset,estimate});
+  function trace(from,to,profile){
+    if(!profile || !Number.isFinite(from) || !Number.isFinite(to) || !Number.isFinite(profile.anchor)) return null;
+    const backwards=profile.direction==="backward";
+    const phase=phases.find(x=>x.key===profile.phase);
+    if(!phase) return null;
+    const offset=backwards?terminalOffset(profile.phase,profile.terminalTemperature,profile.holdMinutes):phase.offset;
+    if(offset===null) return null;
+    const start=Math.max(from,backwards?profile.limit??-Infinity:profile.anchor);
+    const end=Math.min(to,backwards?profile.anchor:profile.end??Infinity);
+    if(start>end) return null;
+    const origin=profile.anchor-offset;
+    const firstCycle=Math.floor((start-origin)/PERIOD), lastCycle=Math.floor((end-origin)/PERIOD);
+    if(lastCycle-firstCycle>256) return {points:[],tooLong:true};
+    const times=[start];
+    for(let c=firstCycle;c<=lastCycle;c++) for(const p of phases){
+      const t=origin+c*PERIOD+p.offset;
+      if(t>start && t<end) times.push(t);
+    }
+    if(end!==start) times.push(end);
+    return {points:times.map(t=>[t,estimate(t,profile).value]),tooLong:false};
+  }
+  return Object.freeze({HIGH,LOW,RATE,HOLD,RAMP,PERIOD,terminalOffset,estimate,trace});
 })();
 if(typeof module==="object"&&module.exports) module.exports=A2BTemperature;
