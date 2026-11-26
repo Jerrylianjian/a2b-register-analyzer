@@ -120,6 +120,8 @@ test('series and totals use the same chain, node, register and time filter', () 
   });
   const view = interrupts(ds, { base: 0x68, node: 1, reg: 0x2E });
   assert.deepEqual(view.series.map(p => [p.total,p.checked[2]]), [[2,2],[0,0]]);
+  assert.deepEqual(interrupts(ds).series.map(p => p.hitGroups), [[[0x68,3],[0x6A,1]],[]]);
+  assert.deepEqual(view.series.map(p => p.hitGroups), [[[0x68,2]],[]]);
   const row = view.rows[0];
   assert.equal(row.hits, 2);
   assert.equal(row.hitRounds, 1);
