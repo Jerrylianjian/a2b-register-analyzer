@@ -109,10 +109,33 @@ test('time limits use Compile Start, including single-digit hours; patrol scope 
   assert.equal(interrupts(ds, { from, to: clock('2026-11-25 20:30:00') }).rounds, 1);
 });
 
+test('series and totals use the same chain, node, register and time filter', () => {
+  const ds = fixture(({ round, chip, read, select }) => {
+    round('2026/11/25 20:20:55');
+    chip(0x68); read(0x73, 1);
+    select(0x68, 1); read(0x12, 0x13); read(0x2E, 1); read(0x2E, 1);
+    select(0x6A, 1); read(0x12, 0x13); read(0x2E, 1);
+    round('2026/11/25 20:30:55');
+    select(0x68, 1); read(0x12, 0x11); read(0x2E, 1);
+  });
+  const view = interrupts(ds, { base: 0x68, node: 1, reg: 0x2E });
+  assert.deepEqual(view.series.map(p => [p.total,p.checked[2]]), [[2,2],[0,0]]);
+  const row = view.rows[0];
+  assert.equal(row.hits, 2);
+  assert.equal(row.hitRounds, 1);
+  assert.equal(row.firstHit, row.lastHit);
+  assert.equal(row.firstHit, clock('2026/11/25 20:20:55'));
+  assert.equal(interrupts(ds, { from: clock('2026/11/25 20:25:00'), base: 0x68 }).series[0].total, 0);
+});
+
 test('published aggregate has no per-read rows, filenames, or source paths', () => {
   const model = JSON.parse(html.match(/id="interruptSnapshot">([^<]*)<\/script>/)[1]);
-  for (const r of Object.values(model.modes)) {
-    assert.deepEqual(Object.keys(r).sort(), ['fileCount','from','pairs','rounds','rows','to'].sort());
-    for (const c of r.rows) assert.deepEqual(Object.keys(c).sort(), ['base','node','reg','hits','hitRounds','checked','invalid','wrongId','unknownId','other2E'].sort());
+  assert.equal(model.version, 2);
+  assert.deepEqual(Object.keys(model).sort(), ['version','fromRequested','toRequested','fileCount','pairs','patterns','rounds'].sort());
+  for (const r of model.rounds) {
+    assert.ok(r.length === 3 && r.every(Number.isInteger) && model.patterns[r[2]]);
+  }
+  for (const pattern of model.patterns) {
+    for (const c of pattern) assert.ok(c.length === 9 && c.every(Number.isInteger) && analyzer.REGS.includes(c[2]));
   }
 });

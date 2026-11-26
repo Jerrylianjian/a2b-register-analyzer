@@ -31,17 +31,25 @@ function sources(root, entry = root) {
 }
 
 const input = analyzer.parse(sources(path.resolve(directory)));
-const modes = Object.fromEntries(['all', 'repeat'].map(mode => [mode, analyzer.interrupts(input, { mode, from, to })]));
-if (!modes.all.pairs.length) throw new Error('No target reads in the chosen time window');
-// Publish only counters and the overall time range; never copy logs, values per read,
-// file names, file paths, line numbers, or unrelated registers into the snapshot.
-const payload = JSON.stringify({ version: 1, fromRequested: from, toRequested: to, modes });
+const selected=analyzer.interruptRounds(input).filter(([time]) => (from === null || time >= from) && (to === null || time <= to));
+const report=analyzer.interrupts({pairs:input.pairs,irqRounds:selected});
+if (!report.pairs.length) throw new Error('No target reads in the chosen time window');
+// Publish time-aligned counts only, using a shared dictionary for repeated summaries.
+// No read values, raw commands, file names, file indices, or unrelated registers.
+const patterns=[], patternIds=new Map();
+const rounds=selected.map(([time,patrol,counts]) => {
+  const key=JSON.stringify(counts);
+  if(!patternIds.has(key)) patternIds.set(key,patterns.push(counts)-1);
+  return [time,patrol,patternIds.get(key)];
+});
+const payload = JSON.stringify({ version: 2, fromRequested: from, toRequested: to,
+  fileCount: report.fileCount, pairs: report.pairs, patterns, rounds });
 const block = /(<script type="application\/json" id="interruptSnapshot">)[^<]*(<\/script>)/;
 if (!block.test(html)) throw new Error('No interrupt snapshot block found');
 fs.writeFileSync(htmlPath, html.replace(block, (_, open, close) => open + payload + close));
 console.log(JSON.stringify({
-  pairs: modes.all.pairs.map(p => p.map(analyzer.hex)),
-  files: modes.all.fileCount, rounds: modes.all.rounds,
-  from: analyzer.stamp(modes.all.from), to: analyzer.stamp(modes.all.to),
-  hits: Object.fromEntries(analyzer.REGS.map(r => [analyzer.hex(r), modes.all.rows.filter(c => c.reg === r).reduce((n, c) => n + c.hits, 0)])),
+  pairs: report.pairs.map(p => p.map(analyzer.hex)),
+  files: report.fileCount, rounds: report.rounds,
+  from: analyzer.stamp(report.from), to: analyzer.stamp(report.to),
+  hits: Object.fromEntries(analyzer.REGS.map(r => [analyzer.hex(r), report.rows.filter(c => c.reg === r).reduce((n, c) => n + c.hits, 0)])),
 }, null, 2));
