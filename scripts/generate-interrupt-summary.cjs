@@ -34,15 +34,15 @@ const input = analyzer.parse(sources(path.resolve(directory)));
 const selected=analyzer.interruptRounds(input).filter(([time]) => (from === null || time >= from) && (to === null || time <= to));
 const report=analyzer.interrupts({pairs:input.pairs,irqRounds:selected});
 if (!report.pairs.length) throw new Error('No target reads in the chosen time window');
-// Publish time-aligned counts only, using a shared dictionary for repeated summaries.
-// No read values, raw commands, file names, file indices, or unrelated registers.
+// Publish time-aligned counts and the requested 0x73 byte sequences only.
+// No raw commands, file names, file indices, or value sequences for other registers.
 const patterns=[], patternIds=new Map();
 const rounds=selected.map(([time,patrol,counts]) => {
   const key=JSON.stringify(counts);
   if(!patternIds.has(key)) patternIds.set(key,patterns.push(counts)-1);
   return [time,patrol,patternIds.get(key)];
 });
-const payload = JSON.stringify({ version: 2, fromRequested: from, toRequested: to,
+const payload = JSON.stringify({ version: 3, fromRequested: from, toRequested: to,
   fileCount: report.fileCount, pairs: report.pairs, patterns, rounds });
 const block = /(<script type="application\/json" id="interruptSnapshot">)[^<]*(<\/script>)/;
 if (!block.test(html)) throw new Error('No interrupt snapshot block found');

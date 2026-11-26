@@ -130,14 +130,35 @@ test('series and totals use the same chain, node, register and time filter', () 
   assert.equal(interrupts(ds, { from: clock('2026/11/25 20:25:00'), base: 0x68 }).series[0].total, 0);
 });
 
-test('published aggregate has no per-read rows, filenames, or source paths', () => {
+test('0x73 byte sequences preserve order and repeats, exclude failed slave identity, and follow the hit node', () => {
+  const ds = fixture(({ round, chip, read, select }) => {
+    round('2026/11/25 20:20:55');
+    chip(0x68); read(0x73, 0); read(0x73, 0x27); read(0x73, 0x27);
+    select(0x68, 1); read(0x73, 0x09); read(0x12, 0x11); read(0x2D, 1);
+    select(0x68, 2); read(0x73, 0x01); read(0x12, 0x13); read(0x2D, 1);
+  });
+  const all=interrupts(ds);
+  assert.deepEqual(all.series[0].reads73,[[0x68,0,[0,0x27,0x27]],[0x68,2,[0x01]]]);
+  assert.deepEqual(get(all,0x68,0,0x73).values73,{0:1,39:2});
+  const filtered=interrupts(ds,{reg:0x2D});
+  assert.deepEqual(filtered.series[0].hitReads73,[[0x68,2,[0x01]]]);
+});
+
+test('published aggregate includes only 0x73 value sequences and no filenames or source paths', () => {
   const model = JSON.parse(html.match(/id="interruptSnapshot">([^<]*)<\/script>/)[1]);
-  assert.equal(model.version, 2);
+  assert.equal(model.version, 3);
   assert.deepEqual(Object.keys(model).sort(), ['version','fromRequested','toRequested','fileCount','pairs','patterns','rounds'].sort());
   for (const r of model.rounds) {
     assert.ok(r.length === 3 && r.every(Number.isInteger) && model.patterns[r[2]]);
   }
   for (const pattern of model.patterns) {
-    for (const c of pattern) assert.ok(c.length === 9 && c.every(Number.isInteger) && analyzer.REGS.includes(c[2]));
+    for (const c of pattern) {
+      assert.ok(c.slice(0,9).every(Number.isInteger) && analyzer.REGS.includes(c[2]));
+      if (c[2] === 0x73) {
+        assert.equal(c.length,10);
+        assert.equal(c[9].length,c[4]);
+        assert.ok(c[9].every(v=>Number.isInteger(v)&&v>=0&&v<=255));
+      } else assert.equal(c.length,9);
+    }
   }
 });
